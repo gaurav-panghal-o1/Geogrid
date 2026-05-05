@@ -1,0 +1,1141 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geo-Matrix: Infinity Mode</title>
+    <style>
+        :root {
+            --bg-color: #1e1e24;
+            --card-bg: #2b2b36;
+            --text-color: #ffffff;
+            --accent-color: #6c5ce7;
+            --correct-bg: #2ecc71;
+            --wrong-bg: #e74c3c;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex; flex-direction: column; align-items: center;
+            padding: 2rem; margin: 0;
+        }
+
+        .game-board {
+            display: grid;
+            grid-template-columns: 140px repeat(3, 140px);
+            grid-template-rows: 140px repeat(3, 140px);
+            gap: 12px;
+        }
+
+        .cell {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            text-align: center; padding: 10px; font-size: 0.95rem; font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: transform 0.2s;
+        }
+
+        .header { background-color: transparent; box-shadow: none; color: #a29bfe; font-size: 1.1rem; }
+        .empty-corner { background: transparent; box-shadow: none; }
+        
+        .playable:hover { transform: scale(1.05); cursor: pointer; border: 2px solid var(--accent-color); }
+        .playable.locked:hover { transform: none; cursor: default; border: none; }
+
+        #search-modal {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background-color: var(--card-bg); padding: 20px; border-radius: 12px;
+            z-index: 1000; box-shadow: 0 10px 25px rgba(0,0,0,0.5); width: 320px;
+        }
+        #search-modal.active { display: block; }
+        
+        #overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 999; }
+        #overlay.active { display: block; }
+
+        input[type="text"] { width: 90%; padding: 12px; margin-bottom: 10px; border-radius: 6px; border: none; background: #1e1e24; color: white; font-size: 1rem; }
+
+        .search-results div { padding: 12px; border-bottom: 1px solid #444; cursor: pointer; display: flex; justify-content: space-between; }
+        .search-results div:hover { background-color: #444; }
+        
+        /* NEW: Styling for already used countries */
+        .search-results div.used { color: #888; cursor: not-allowed; font-style: italic; }
+        .search-results div.used:hover { background-color: transparent; }
+
+        .flag-img { width: 70px; border-radius: 4px; margin-bottom: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.5);}
+
+        /* Shake animation for errors */
+        @keyframes shake { 0% { transform: translate(-50%, -50%) translateX(0); } 25% { transform: translate(-50%, -50%) translateX(-10px); } 50% { transform: translate(-50%, -50%) translateX(10px); } 75% { transform: translate(-50%, -50%) translateX(-10px); } 100% { transform: translate(-50%, -50%) translateX(0); } }
+        .shake { animation: shake 0.4s; }
+    </style>
+</head>
+<body>
+
+    <h1>🌍 Geo-Matrix: Pro Edition</h1>
+    <div class="game-board" id="board"></div>
+
+    <div id="overlay"></div>
+    <div id="search-modal">
+        <h3 id="modal-title">Guess Country</h3>
+        <input type="text" id="search-input" placeholder="Type a country name..." autocomplete="off">
+        <div class="search-results" id="search-results"></div>
+    </div>
+
+    <script>
+        const API_URL = "http://127.0.0.1:8000/api";
+        let currentBoard = null;
+        let selectedCell = null;
+        let usedCountries = []; // NEW: State Tracker
+
+        async function loadBoard() {
+            usedCountries = []; // Reset on new game
+            const res = await fetch(`${API_URL}/generate-board`);
+            const data = await res.json();
+            currentBoard = data.board;
+            renderBoard();
+        }
+
+        function renderBoard() {
+            const boardDiv = document.getElementById('board');
+            boardDiv.innerHTML = `<div class="cell empty-corner"><button onclick="loadBoard()" style="padding: 10px; background: var(--accent-color); color: white; border: none; border-radius: 6px; cursor: pointer;">New Game</button></div>`;
+
+            currentBoard.cols.forEach(col => boardDiv.innerHTML += `<div class="cell header">${col}</div>`);
+
+            currentBoard.rows.forEach((row, rowIndex) => {
+                boardDiv.innerHTML += `<div class="cell header">${row}</div>`;
+                currentBoard.cols.forEach((col, colIndex) => {
+                    const cellId = `cell-${rowIndex}-${colIndex}`;
+                    boardDiv.innerHTML += `<div class="cell playable" id="${cellId}" onclick="openSearch('${cellId}', '${row}', '${col}')">?</div>`;
+                });
+            });
+        }
+
+        function openSearch(cellId, rowCat, colCat) {
+            if(document.getElementById(cellId).classList.contains('locked')) return;
+
+            selectedCell = { id: cellId, row: rowCat, col: colCat };
+            document.getElementById('modal-title').innerText = `${rowCat} \n+ \n${colCat}`;
+            document.getElementById('search-modal').classList.add('active');
+            document.getElementById('overlay').classList.add('active');
+            document.getElementById('search-input').value = '';
+            document.getElementById('search-results').innerHTML = '';
+            document.getElementById('search-input').focus();
+        }
+
+        function closeSearch() {
+            document.getElementById('search-modal').classList.remove('active');
+            document.getElementById('overlay').classList.remove('active');
+        }
+        document.getElementById('overlay').onclick = closeSearch;
+
+        document.getElementById('search-input').addEventListener('input', async (e) => {
+            const query = e.target.value;
+            if (query.length < 2) return;
+
+            const res = await fetch(`${API_URL}/search?q=${query}`);
+            const data = await res.json();
+            
+            const resultsDiv = document.getElementById('search-results');
+            resultsDiv.innerHTML = data.results.map(country => {
+                const isUsed = usedCountries.includes(country.id);
+                // Visually distinguish used countries and change onclick behavior
+                if(isUsed) {
+                    return `<div class="used" onclick="showError()"><span>${country.name}</span> <small>Used</small></div>`;
+                }
+                return `<div onclick="submitGuess('${country.id}')">${country.name}</div>`;
+            }).join('');
+        });
+
+        function showError() {
+            const modal = document.getElementById('search-modal');
+            modal.classList.remove('shake');
+            void modal.offsetWidth; // trigger reflow
+            modal.classList.add('shake');
+        }
+
+        async function submitGuess(cca3) {
+            const res = await fetch(`${API_URL}/submit-guess`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    row_cat: selectedCell.row,
+                    col_cat: selectedCell.col,
+                    guess_cca3: cca3,
+                    used_countries: usedCountries // NEW: Pass state to backend
+                })
+            });
+            const result = await res.json();
+            const cellElement = document.getElementById(selectedCell.id);
+
+            if (result.correct) {
+                usedCountries.push(cca3); // NEW: Lock the country
+                cellElement.classList.add('locked');
+                cellElement.style.backgroundColor = 'var(--correct-bg)';
+                cellElement.style.color = 'white';
+                cellElement.innerHTML = `<img src="https://flagcdn.com/w80/${result.flag_cca2}.png" class="flag-img" alt="flag"><span>${result.country_name}</span>`;
+                closeSearch();
+            } else {
+                if (result.message === "Already on board!") {
+                    showError();
+                } else {
+                    cellElement.style.backgroundColor = 'var(--wrong-bg)';
+                    setTimeout(() => cellElement.style.backgroundColor = 'var(--card-bg)', 500);
+                    closeSearch();
+                }
+            }
+        }
+
+        loadBoard();
+    </script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GEO-MATRIX // INTEL EDITION</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,700;1,300&family=Cormorant+Garamond:ital,wght@0,300;0,600;0,700;1,300;1,600&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg:           #0d0f14;
+            --panel:        #171c28;
+            --panel-raised: #1e2535;
+            --border:       #252e45;
+            --border-lit:   #3a4d72;
+            --amber:        #c8973a;
+            --amber-bright: #f0b84a;
+            --amber-dim:    #8a6828;
+            --green-correct:#1e6644;
+            --green-glow:   #38c97a;
+            --red-wrong:    #6b2222;
+            --red-glow:     #c93838;
+            --text-primary: #e2e8f5;
+            --text-secondary:#9aaac8;
+            --text-muted:   #5a6a88;
+            --scanline:     rgba(200,151,58,0.03);
+            --corner-size:  10px;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html { height: 100%; }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text-primary);
+            font-family: 'IBM Plex Mono', monospace;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        /* === TOPOGRAPHIC GRID BACKGROUND === */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                linear-gradient(rgba(200,151,58,0.035) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(200,151,58,0.035) 1px, transparent 1px);
+            background-size: 60px 60px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* === VIGNETTE === */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.7) 100%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* === SCANLINE OVERLAY === */
+        .scanlines {
+            position: fixed;
+            inset: 0;
+            background: repeating-linear-gradient(
+                to bottom,
+                transparent 0px,
+                transparent 3px,
+                var(--scanline) 3px,
+                var(--scanline) 4px
+            );
+            pointer-events: none;
+            z-index: 1000;
+            animation: scanroll 12s linear infinite;
+            opacity: 0.4;
+        }
+
+        @keyframes scanroll {
+            0%   { background-position: 0 0; }
+            100% { background-position: 0 100vh; }
+        }
+
+        /* === HEADER === */
+        .header-wrapper {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 780px;
+            padding: 2.5rem 1.5rem 1rem;
+            text-align: center;
+        }
+
+        .header-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            letter-spacing: 0.3em;
+            color: var(--amber);
+            border: 1px solid var(--amber-dim);
+            padding: 3px 10px;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+        }
+
+        .header-title {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: clamp(2.5rem, 6vw, 4.5rem);
+            font-weight: 700;
+            letter-spacing: 0.12em;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            line-height: 1;
+        }
+
+        .header-title span {
+            color: var(--amber);
+        }
+
+        .header-sub {
+            font-size: 0.6rem;
+            letter-spacing: 0.25em;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+            text-transform: uppercase;
+        }
+
+        .header-rule {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 1.5rem;
+        }
+        .header-rule::before, .header-rule::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(to right, transparent, var(--border-lit));
+        }
+        .header-rule::before { background: linear-gradient(to left, transparent, var(--border-lit)); }
+        .header-rule-text {
+            font-size: 0.55rem;
+            letter-spacing: 0.3em;
+            color: var(--text-muted);
+        }
+
+        /* === STATUS BAR === */
+        .status-bar {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 780px;
+            padding: 0 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .status-item {
+            font-size: 0.6rem;
+            letter-spacing: 0.15em;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+        .status-item span {
+            color: var(--amber);
+            font-weight: 500;
+        }
+
+        .new-mission-btn {
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.6rem;
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            color: var(--amber);
+            background: transparent;
+            border: 1px solid var(--amber-dim);
+            padding: 6px 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        .new-mission-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: var(--amber);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+
+        .new-mission-btn:hover {
+            color: var(--bg);
+            border-color: var(--amber-bright);
+        }
+        .new-mission-btn:hover::before { opacity: 1; }
+        .new-mission-btn span { position: relative; z-index: 1; }
+
+        /* === GAME BOARD === */
+        .board-wrapper {
+            position: relative;
+            z-index: 10;
+            padding: 0 1rem 2rem;
+            width: 100%;
+            max-width: 780px;
+        }
+
+        .game-board {
+            display: grid;
+            grid-template-columns: 150px repeat(3, 1fr);
+            grid-template-rows: 150px repeat(3, 1fr);
+            gap: 8px;
+        }
+
+        /* === BASE CELL === */
+        .cell {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 12px;
+            font-size: 0.68rem;
+            min-height: 130px;
+            transition: all 0.25s ease;
+        }
+
+        /* === CORNER BRACKETS === */
+        .cell::before, .cell::after,
+        .cell .bracket-bl, .cell .bracket-br {
+            content: '';
+            position: absolute;
+            width: var(--corner-size);
+            height: var(--corner-size);
+            pointer-events: none;
+            transition: all 0.25s ease;
+        }
+        .cell::before  { top: 0; left: 0;   border-top: 1px solid var(--border-lit); border-left:  1px solid var(--border-lit); }
+        .cell::after   { top: 0; right: 0;  border-top: 1px solid var(--border-lit); border-right: 1px solid var(--border-lit); }
+        .cell .bracket-bl { bottom: 0; left: 0;  border-bottom: 1px solid var(--border-lit); border-left:  1px solid var(--border-lit); }
+        .cell .bracket-br { bottom: 0; right: 0; border-bottom: 1px solid var(--border-lit); border-right: 1px solid var(--border-lit); }
+
+        /* === HEADER CELLS (criteria labels) === */
+        .cell.header {
+            background: rgba(23, 28, 40, 0.5);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+        }
+        .cell.header::before, .cell.header::after,
+        .cell.header .bracket-bl, .cell.header .bracket-br { display: none; }
+
+        .header-label {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            gap: 6px;
+        }
+
+        .header-index {
+            font-size: 0.45rem;
+            letter-spacing: 0.2em;
+            color: var(--amber-dim);
+        }
+
+        .header-text {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            line-height: 1.45;
+            letter-spacing: 0.02em;
+        }
+
+        .header-bar {
+            width: 24px;
+            height: 1px;
+            background: var(--amber-dim);
+        }
+
+        /* === CORNER EMPTY CELL === */
+        .cell.empty-corner { background: transparent; }
+        .cell.empty-corner::before, .cell.empty-corner::after,
+        .cell.empty-corner .bracket-bl, .cell.empty-corner .bracket-br { display: none; }
+
+        .corner-logo {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+        }
+        .corner-logo-mark {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.1em;
+        }
+        .corner-logo-sub {
+            font-size: 0.45rem;
+            letter-spacing: 0.3em;
+            color: var(--text-muted);
+        }
+
+        /* === PLAYABLE CELLS === */
+        .cell.playable {
+            background: linear-gradient(145deg, var(--panel) 0%, #141928 100%);
+            border: 1px solid var(--border);
+            cursor: pointer;
+        }
+
+        .cell.playable:hover {
+            background: linear-gradient(145deg, var(--panel-raised) 0%, #1c2438 100%);
+            border-color: var(--border-lit);
+            transform: scale(1.02);
+        }
+
+        .cell.playable:hover::before, .cell.playable:hover::after,
+        .cell.playable:hover .bracket-bl, .cell.playable:hover .bracket-br {
+            width: 14px;
+            height: 14px;
+            border-color: var(--amber);
+            border-width: 2px;
+        }
+
+        .cell-question {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 2.4rem;
+            font-weight: 300;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        .cell-coord {
+            font-size: 0.48rem;
+            letter-spacing: 0.25em;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        /* === LOCKED / CORRECT CELL === */
+        .cell.locked {
+            background: var(--green-correct);
+            cursor: default;
+            transform: none !important;
+        }
+        .cell.locked::before, .cell.locked::after,
+        .cell.locked .bracket-bl, .cell.locked .bracket-br {
+            border-color: var(--green-glow);
+        }
+
+        .cell.locked:hover {
+            background: var(--green-correct);
+            transform: none;
+        }
+
+        .cell-flag {
+            width: 64px;
+            border-radius: 2px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.6);
+            margin-bottom: 6px;
+            image-rendering: auto;
+        }
+
+        .cell-country-name {
+            font-size: 0.6rem;
+            font-weight: 500;
+            letter-spacing: 0.08em;
+            color: #fff;
+            line-height: 1.3;
+        }
+
+        /* === WRONG DOUBLE-BLINK ===
+           Keyframe matches the gradient that .cell.playable uses so the
+           start and end states are seamless. Two full red pulses, no
+           'forwards' fill so the gradient restores cleanly on removal. */
+        @keyframes wrongBlink {
+            0%   { background: linear-gradient(145deg, var(--panel) 0%, #141928 100%);
+                   border-color: var(--border); box-shadow: none; }
+            25%  { background: var(--red-wrong);
+                   border-color: var(--red-glow);
+                   box-shadow: 0 0 18px rgba(201,56,56,0.45) inset; }
+            50%  { background: linear-gradient(145deg, var(--panel) 0%, #141928 100%);
+                   border-color: var(--border); box-shadow: none; }
+            75%  { background: var(--red-wrong);
+                   border-color: var(--red-glow);
+                   box-shadow: 0 0 18px rgba(201,56,56,0.45) inset; }
+            100% { background: linear-gradient(145deg, var(--panel) 0%, #141928 100%);
+                   border-color: var(--border); box-shadow: none; }
+        }
+
+        .cell.flash-wrong {
+            animation: wrongBlink 0.75s ease;
+        }
+
+        /* === REVEAL ANIMATION FOR CORRECT === */
+        @keyframes cellReveal {
+            0%   { opacity: 0; transform: scale(0.85); }
+            60%  { transform: scale(1.04); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+        .cell.locked { animation: cellReveal 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards; }
+
+        /* === OVERLAY === */
+        #overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.75);
+            backdrop-filter: blur(2px);
+            z-index: 200;
+        }
+        #overlay.active { display: block; }
+
+        /* === SEARCH MODAL === */
+        #search-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 300;
+            width: min(480px, 92vw);
+            background: var(--panel);
+            padding: 0;
+        }
+        #search-modal.active { display: block; }
+
+        /* Outer frame */
+        .modal-frame {
+            position: relative;
+            border: 1px solid var(--border-lit);
+            padding: 24px;
+            background: var(--panel);
+        }
+
+        .modal-frame::before, .modal-frame::after,
+        .modal-frame .mf-bl, .modal-frame .mf-br {
+            content: '';
+            position: absolute;
+            width: 16px;
+            height: 16px;
+            border-color: var(--amber);
+        }
+        .modal-frame::before  { top: -1px; left: -1px;   border-top:    2px solid; border-left:  2px solid; }
+        .modal-frame::after   { top: -1px; right: -1px;  border-top:    2px solid; border-right: 2px solid; }
+        .modal-frame .mf-bl   { bottom: -1px; left: -1px;  border-bottom: 2px solid var(--amber); border-left:  2px solid var(--amber); }
+        .modal-frame .mf-br   { bottom: -1px; right: -1px; border-bottom: 2px solid var(--amber); border-right: 2px solid var(--amber); }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 16px;
+        }
+
+        .modal-label {
+            font-size: 0.5rem;
+            letter-spacing: 0.3em;
+            color: var(--amber);
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .modal-criteria {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            line-height: 1.3;
+        }
+
+        .modal-close-btn {
+            background: transparent;
+            border: 1px solid var(--border-lit);
+            color: var(--text-secondary);
+            width: 26px;
+            height: 26px;
+            cursor: pointer;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.7rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+        .modal-close-btn:hover { border-color: var(--amber); color: var(--amber); }
+
+        /* === TERMINAL INPUT === */
+        .input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+            border: 1px solid var(--border-lit);
+            background: var(--bg);
+            margin-bottom: 12px;
+        }
+
+        .input-prompt {
+            padding: 0 10px;
+            font-size: 0.75rem;
+            color: var(--amber);
+            flex-shrink: 0;
+        }
+
+        #search-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text-primary);
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 0.8rem;
+            padding: 12px 12px 12px 0;
+            caret-color: var(--amber);
+        }
+
+        /* === RESULTS === */
+        .search-results {
+            max-height: 240px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-lit) transparent;
+        }
+
+        .result-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+            transition: background 0.12s;
+            font-size: 0.72rem;
+        }
+
+        .result-item:hover {
+            background: var(--panel-raised);
+            border-left: 2px solid var(--amber-dim);
+            padding-left: 10px;
+        }
+
+        .result-item:last-child { border-bottom: none; }
+
+        .result-name { color: var(--text-primary); }
+        .result-id   { font-size: 0.55rem; color: var(--text-secondary); letter-spacing: 0.1em; }
+
+        .result-item.used {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+        .result-item.used:hover { background: transparent; }
+
+        .used-tag {
+            font-size: 0.5rem;
+            letter-spacing: 0.15em;
+            color: var(--amber-dim);
+            border: 1px solid var(--amber-dim);
+            padding: 2px 6px;
+        }
+
+        .no-results {
+            padding: 20px 12px;
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            text-align: center;
+            font-style: italic;
+        }
+
+        /* === SHAKE ANIMATION === */
+        @keyframes shake {
+            0%   { transform: translate(-50%, -50%) translateX(0); }
+            15%  { transform: translate(-50%, -50%) translateX(-9px); }
+            30%  { transform: translate(-50%, -50%) translateX(9px); }
+            45%  { transform: translate(-50%, -50%) translateX(-6px); }
+            60%  { transform: translate(-50%, -50%) translateX(6px); }
+            75%  { transform: translate(-50%, -50%) translateX(-3px); }
+            100% { transform: translate(-50%, -50%) translateX(0); }
+        }
+        #search-modal.shake { animation: shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+
+        /* === ERROR TOAST === */
+        .error-toast {
+            font-size: 0.58rem;
+            letter-spacing: 0.1em;
+            color: #e07070;
+            text-align: center;
+            padding: 6px 0 0;
+            min-height: 1.5em;
+            transition: opacity 0.3s;
+        }
+
+        /* === FOOTER === */
+        .footer {
+            position: relative;
+            z-index: 10;
+            padding: 1.5rem;
+            font-size: 0.5rem;
+            letter-spacing: 0.2em;
+            color: var(--text-muted);
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        /* === LOADING STATE === */
+        .loading-cell .cell-question {
+            animation: blink 1s step-end infinite;
+        }
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+
+        /* === BOARD ENTRANCE ANIMATION === */
+        .game-board .cell.playable {
+            animation: cellEntrance 0.4s ease both;
+        }
+
+        @keyframes cellEntrance {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="scanlines"></div>
+
+    <!-- HEADER -->
+    <header class="header-wrapper">
+        <div class="header-badge">Classified // Infinity Mode Active</div>
+        <h1 class="header-title">Geo<span>·</span>Matrix</h1>
+        <p class="header-sub">Geographical Intelligence Grid // Pro Edition</p>
+        <div class="header-rule"><span class="header-rule-text">◈ Intersect &amp; Identify ◈</span></div>
+    </header>
+
+    <!-- STATUS BAR -->
+    <div class="status-bar">
+        <div class="status-item">Grid Status: <span id="status-text">LOADING</span></div>
+        <button class="new-mission-btn" onclick="loadBoard()"><span>⟳ New Mission</span></button>
+        <div class="status-item">Countries Used: <span id="used-count">0</span></div>
+    </div>
+
+    <!-- BOARD -->
+    <div class="board-wrapper">
+        <div class="game-board" id="board"></div>
+    </div>
+
+    <footer class="footer">Geo-Matrix Pro Edition // Offline-First Intelligence Engine</footer>
+
+    <!-- OVERLAY & MODAL -->
+    <div id="overlay"></div>
+    <div id="search-modal">
+        <div class="modal-frame">
+            <div class="mf-bl"></div>
+            <div class="mf-br"></div>
+            <div class="modal-header">
+                <div>
+                    <div class="modal-label">⬡ Target Intersection</div>
+                    <div class="modal-criteria" id="modal-title">—</div>
+                </div>
+                <button class="modal-close-btn" onclick="closeSearch()">✕</button>
+            </div>
+
+            <div class="input-wrapper">
+                <span class="input-prompt">&gt;_</span>
+                <input type="text" id="search-input" placeholder="Search country..." autocomplete="off" spellcheck="false">
+            </div>
+
+            <div class="search-results" id="search-results"></div>
+            <div class="error-toast" id="error-toast"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = "http://127.0.0.1:8000/api";
+        let currentBoard  = null;
+        let selectedCell  = null;
+        let usedCountries = [];
+        let solvedCount   = 0;
+
+        /* ===================== BOARD LOADING ===================== */
+        async function loadBoard() {
+            usedCountries = [];
+            solvedCount   = 0;
+            setStatus('ACQUIRING');
+            document.getElementById('used-count').textContent = '0';
+
+            try {
+                const res  = await fetch(`${API_URL}/generate-board`);
+                const data = await res.json();
+                currentBoard = data.board;
+                renderBoard();
+                setStatus('ACTIVE');
+            } catch(e) {
+                setStatus('OFFLINE');
+                renderError();
+            }
+        }
+
+        function setStatus(s) {
+            const el = document.getElementById('status-text');
+            el.textContent = s;
+            el.style.color = s === 'ACTIVE' ? 'var(--green-glow)'
+                           : s === 'OFFLINE' ? 'var(--red-glow)'
+                           : 'var(--amber)';
+        }
+
+        /* ===================== RENDER BOARD ===================== */
+        function renderBoard() {
+            const boardDiv = document.getElementById('board');
+            boardDiv.innerHTML = '';
+
+            // Empty corner
+            const corner = makeCell('empty-corner');
+            corner.innerHTML = `<div class="corner-logo">
+                <div class="corner-logo-mark">GM</div>
+                <div class="corner-logo-sub">Pro Edition</div>
+            </div>`;
+            boardDiv.appendChild(corner);
+
+            // Column headers
+            currentBoard.cols.forEach((col, i) => {
+                const cell = makeCell('header');
+                cell.innerHTML = `<div class="header-label">
+                    <div class="header-index">COL-${String(i+1).padStart(2,'0')}</div>
+                    <div class="header-bar"></div>
+                    <div class="header-text">${col}</div>
+                </div>`;
+                boardDiv.appendChild(cell);
+            });
+
+            // Rows
+            currentBoard.rows.forEach((row, ri) => {
+                // Row header
+                const rh = makeCell('header');
+                rh.innerHTML = `<div class="header-label">
+                    <div class="header-index">ROW-${String(ri+1).padStart(2,'0')}</div>
+                    <div class="header-bar"></div>
+                    <div class="header-text">${row}</div>
+                </div>`;
+                boardDiv.appendChild(rh);
+
+                // Playable cells
+                currentBoard.cols.forEach((col, ci) => {
+                    const id   = `cell-${ri}-${ci}`;
+                    const cell = makeCell('playable');
+                    cell.id    = id;
+                    cell.style.animationDelay = `${(ri * 3 + ci) * 50}ms`;
+                    cell.innerHTML = `
+                        <div class="bracket-bl"></div>
+                        <div class="bracket-br"></div>
+                        <span class="cell-question">?</span>
+                        <span class="cell-coord">${String.fromCharCode(65+ri)}${ci+1}</span>`;
+                    cell.onclick = () => openSearch(id, row, col, ri, ci);
+                    boardDiv.appendChild(cell);
+                });
+            });
+        }
+
+        function renderError() {
+            document.getElementById('board').innerHTML =
+                `<div style="grid-column:1/-1;padding:3rem;text-align:center;color:var(--text-muted);font-size:0.7rem;letter-spacing:0.2em;">
+                    SIGNAL LOST — BACKEND OFFLINE<br><br>
+                    <span style="color:var(--text-muted);font-size:0.55rem;">Ensure FastAPI is running on port 8000</span>
+                </div>`;
+        }
+
+        function makeCell(...classes) {
+            const el = document.createElement('div');
+            el.className = 'cell ' + classes.join(' ');
+            return el;
+        }
+
+        /* ===================== SEARCH MODAL ===================== */
+        function openSearch(cellId, rowCat, colCat, ri, ci) {
+            const cell = document.getElementById(cellId);
+            if (cell.classList.contains('locked')) return;
+
+            selectedCell = { id: cellId, row: rowCat, col: colCat, ri, ci };
+
+            const rowLabel = `ROW-${String(ri+1).padStart(2,'0')}: ${rowCat}`;
+            const colLabel = `COL-${String(ci+1).padStart(2,'0')}: ${colCat}`;
+            document.getElementById('modal-title').innerHTML =
+                `${rowLabel}<br><span style="color:var(--amber);font-style:italic">∩</span> ${colLabel}`;
+
+            document.getElementById('search-results').innerHTML = '';
+            document.getElementById('search-input').value = '';
+            document.getElementById('error-toast').textContent = '';
+            document.getElementById('search-modal').classList.add('active');
+            document.getElementById('overlay').classList.add('active');
+            setTimeout(() => document.getElementById('search-input').focus(), 50);
+        }
+
+        function closeSearch() {
+            document.getElementById('search-modal').classList.remove('active');
+            document.getElementById('search-modal').classList.remove('shake');
+            document.getElementById('overlay').classList.remove('active');
+        }
+
+        document.getElementById('overlay').onclick = closeSearch;
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeSearch();
+        });
+
+        /* ===================== AUTOCOMPLETE ===================== */
+        let debounceTimer;
+        document.getElementById('search-input').addEventListener('input', e => {
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => doSearch(e.target.value), 120);
+        });
+
+        async function doSearch(q) {
+            if (!q || q.length < 1) {
+                document.getElementById('search-results').innerHTML = '';
+                return;
+            }
+            try {
+                const res  = await fetch(`${API_URL}/search?q=${encodeURIComponent(q)}`);
+                const data = await res.json();
+                renderResults(data.results);
+            } catch(e) {
+                document.getElementById('search-results').innerHTML =
+                    `<div class="no-results">Connection error</div>`;
+            }
+        }
+
+        function renderResults(results) {
+            const div = document.getElementById('search-results');
+            if (!results.length) {
+                div.innerHTML = `<div class="no-results">No matches found</div>`;
+                return;
+            }
+            div.innerHTML = results.map(country => {
+                const isUsed = usedCountries.includes(country.id);
+                if (isUsed) {
+                    return `<div class="result-item used">
+                        <span class="result-name">${country.name}</span>
+                        <span class="used-tag">USED</span>
+                    </div>`;
+                }
+                return `<div class="result-item" onclick="submitGuess('${country.id}', '${escape(country.name)}')">
+                    <span class="result-name">${country.name}</span>
+                    <span class="result-id">${country.id}</span>
+                </div>`;
+            }).join('');
+        }
+
+        /* ===================== SUBMIT GUESS ===================== */
+        async function submitGuess(cca3, countryName) {
+            try {
+                const res = await fetch(`${API_URL}/submit-guess`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        row_cat:       selectedCell.row,
+                        col_cat:       selectedCell.col,
+                        guess_cca3:    cca3,
+                        used_countries: usedCountries
+                    })
+                });
+                const result = await res.json();
+                handleGuessResult(result, cca3);
+            } catch(e) {
+                showToast('SERVER UNREACHABLE');
+            }
+        }
+
+        function handleGuessResult(result, cca3) {
+            const cell = document.getElementById(selectedCell.id);
+
+            if (result.correct) {
+                usedCountries.push(cca3);
+                solvedCount++;
+                document.getElementById('used-count').textContent = usedCountries.length;
+
+                cell.classList.remove('playable');
+                cell.classList.add('locked');
+                cell.onclick = null;
+                cell.innerHTML = `
+                    <div class="bracket-bl"></div>
+                    <div class="bracket-br"></div>
+                    <img
+                        class="cell-flag"
+                        src="https://flagcdn.com/w80/${result.flag_cca2}.png"
+                        alt="${result.country_name}"
+                        onerror="this.style.display='none'"
+                    >
+                    <span class="cell-country-name">${result.country_name}</span>`;
+                closeSearch();
+
+                if (solvedCount === 9) onVictory();
+
+            } else if (result.message === "Already on board!") {
+                triggerShake();
+                showToast('COUNTRY ALREADY DEPLOYED ON BOARD');
+            } else {
+                cell.classList.add('flash-wrong');
+                setTimeout(() => cell.classList.remove('flash-wrong'), 800);
+                closeSearch();
+            }
+        }
+
+        function triggerShake() {
+            const modal = document.getElementById('search-modal');
+            modal.classList.remove('shake');
+            void modal.offsetWidth;
+            modal.classList.add('shake');
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('error-toast');
+            toast.textContent = `⚠ ${msg}`;
+            toast.style.opacity = '1';
+            setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+        }
+
+        /* ===================== VICTORY ===================== */
+        function onVictory() {
+            setStatus('COMPLETE');
+            setTimeout(() => {
+                const all = document.querySelectorAll('.cell.locked');
+                all.forEach((c, i) => {
+                    setTimeout(() => {
+                        c.style.boxShadow = '0 0 20px var(--green-glow)';
+                    }, i * 80);
+                });
+            }, 200);
+        }
+
+        /* ===================== INIT ===================== */
+        loadBoard();
+    </script>
+</body>
+</html>
