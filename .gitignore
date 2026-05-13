@@ -4,3 +4,6 @@ venv/
 .env
 *.pyc
 data/raw/
+scripts/generate_rarity.py
+index.html
+index (1).html
