@@ -6,4 +6,3 @@ venv/
 data/raw/
 scripts/generate_rarity.py
 index--.html
-data/processed/master_countries.json
