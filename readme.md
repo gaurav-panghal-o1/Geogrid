@@ -17,7 +17,7 @@
 
 <br/>
 
-![Game Preview](data\processed\image2.png)
+![Game Preview](data/processed/image2.png)
 
 <br/>
 
@@ -33,7 +33,7 @@
 
 Geo-Matrix is a **geography-based puzzle game** inspired by the format of sports grid games — but built entirely around countries, geopolitics, and culture. Each game presents a **3×3 grid** where every row and column carries a unique category:
 
-![Game Grid Example](data\processed\image.png)
+![Game Grid Example](data/processed/image.png)
 
 Your job? Find a country for each cell that satisfies **both** its row and column. Simple to learn, endlessly deep.
 
