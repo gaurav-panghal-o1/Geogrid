@@ -7,6 +7,10 @@
       "config": {
         "includeFiles": ["data/processed/master_countries.json"]
       }
+    },
+    {
+      "src": "index.html",
+      "use": "@vercel/static"
     }
   ],
   "routes": [
